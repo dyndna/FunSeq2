@@ -3,8 +3,8 @@
 use strict;
 use IO::Handle;
 use Parallel::ForkManager;
-use Funseq_SNV;
-use Funseq_Indel;
+use code::Funseq_SNV;
+use code::Funseq_Indel;
 
 ##   Obtain basic input parameters ... 
 $| = 1; 
@@ -21,26 +21,28 @@ my $score_cut = $ARGV[9];	  # Non-coding candidate score cut
 my $weight_mode = $ARGV[10];  # weighted / unweighted scoring scheme. 0: unweighted; 1: weighted. 
 my $user_anno_dir = $ARGV[11];  #directory for user-specific annotations
 my $recur_db_use = $ARGV[12];  
+my $sv_length_cut = $ARGV[13];
 my $gene_list = "";	          # gene list file
 my $expression = "";	      # expression file
 my $class = "";		          # sample class file
 my $exp_format = "";		  # expression format : rpkm / raw read count
+my $motif_p_value_cut = 4e-8;
 
 
 ##   Get additional parameters ...
-if (scalar @ARGV == 14){
-	$gene_list = $ARGV[13];
-}
-if (scalar @ARGV==16){
-	$expression = $ARGV[13];
-	$class = $ARGV[14];
-	$exp_format = $ARGV[15];
+if (scalar @ARGV == 15){
+	$gene_list = $ARGV[14];
 }
 if (scalar @ARGV==17){
-	$gene_list = $ARGV[13];
 	$expression = $ARGV[14];
 	$class = $ARGV[15];
 	$exp_format = $ARGV[16];
+}
+if (scalar @ARGV==18){
+	$gene_list = $ARGV[14];
+	$expression = $ARGV[15];
+	$class = $ARGV[16];
+	$exp_format = $ARGV[17];
 }
 
 
@@ -55,75 +57,86 @@ die "Error. Please enter proper MAF...\n" unless ($maf =~ /\d+/ && $maf >=0 && $
 die "Error. Please specify correct Genome Mode...\n" unless ($genome_mode == 1 || $genome_mode ==2); 
 die "Error. Input format should be bed or vcf...\n" unless ($informat =~ /bed|vcf/i);
 die "Error. Output format should be bed or vcf...\n" unless ($outformat =~ /bed|vcf/i);
+die "Error. Indel length cutoff should be integer or 'inf'...\n" unless($sv_length_cut =~ /^\d+$/ || $sv_length_cut eq 'inf');
+
 if ($exp_format ne ""){
 	die "Error. Expression format should be rpkm or raw...\n" unless ($exp_format =~ /rpkm|raw/i);
 }
 
 
+#################### read parameters ###########
 ##   Required files
-my $file_path = "data";                                        # File Path
+my %variable;
+my $file_path;
 
-# Conservation
-my $tgp_snp = "$file_path/1kg.phase1.snp.bed.gz"; 										# 1000 genomes SNP file
-my $gerp_file = "$file_path/All_hg19_RS.bw";											# Gerp score file 
-my $sensitive = "$file_path/sensitive.bed"; 											# Sensitive Region
-my $conserved = "$file_path/conserved.bed";                           					# Ultra conserved region
+open(PA,"config.txt")||die;
+while(<PA>){
+	if (/^file_path=(.+)$/){
+		$file_path=$1;
+	}elsif (/^(\w+) *= *(.+)$/) {
+		$variable{$1}=$file_path.'/'.$2;
+  	}
+}
+
+
+my $tgp_snp=$variable{'tgp_snp'} if defined $variable{'tgp_snp'};					# 1000 genomes SNP file
+my $gerp_file=$variable{'gerp_file'} if defined $variable{'gerp_file'};										# Gerp score file 
+my $sensitive=$variable{'sensitive'} if defined $variable{'sensitive'};										# Sensitive Region
+my $conserved=$variable{'conserved'} if defined $variable{'conserved'};                           			# Ultra conserved region
 
 # Annotations (e.g.ENCODE )
-my $encode_annotation = "$file_path/ENCODE.annotation.gz"; 								# ENCODE  Annotation (except Motif info)
-my $bound_motif = "$file_path/ENCODE.tf.bound.union.bed";  								# ENCODE TF bound Motif 
-my $hot_file = "$file_path/hot.regions.bed";											# Highly occupied regions
-my $enhancer = "$file_path/drm.gene.bed";		 										# Enhancer-gene pairs; 
-my $medial = "$file_path/mrm.gene.bed";													# Medial regulatory module-gene pairs;
-my $motif_pfm = "$file_path/motif.PFM";  												# Motif PFM files 
-my $score_file = "$file_path/motif.score.cut";  										# Rough motif score (corresponding to ~4e-8) produced by TFM-Pvalue 
+my $encode_annotation=$variable{'encode_annotation'} if defined $variable{'encode_annotation'}; 								# ENCODE  Annotation (except Motif info)
+my $bound_motif=$variable{'bound_motif'} if defined $variable{'bound_motif'};  									# ENCODE TF bound Motif 
+my $hot_file=$variable{'hot_file'} if defined $variable{'hot_file'};										# Highly occupied regions
+my $enhancer=$variable{'enhancer'} if defined $variable{'enhancer'};		 								# Enhancer-gene pairs; 
+my $motif_pfm=$variable{'motif_pfm'} if defined $variable{'motif_pfm'};  									# Motif PFM files 
+my $score_file=$variable{'score_file'} if defined $variable{'score_file'};  									# Rough motif score (corresponding to ~4e-8) produced by TFM-Pvalue 
 
 # Networks
-my $network_dir = "$file_path/networks";												# Network hubs
-my $reg_net = "$file_path/regulatory.network";											# Regulatory Network
-
-# GENCODE
-my $gencode_v = (split /\./,(split /\//,`ls $file_path/gencode/*.promoter.bed`)[-1])[1]; 
-my $cds = "$file_path/gencode/gencode.$gencode_v.cds.bed";  							# GENCODE CDS
-my $promoter = "$file_path/gencode/gencode.$gencode_v.promoter.bed"; 					# Promoter Region; upstream -2.5kb
-my $intron = "$file_path/gencode/gencode.$gencode_v.intron.bed";                        # Intronic Region
-my $utr = "$file_path/gencode/gencode.$gencode_v.utr.bed";                              # UTR Region
-my $coding_interval = "$file_path/gencode/gencode.$gencode_v.cds.interval";				# VAT
-my $coding_fasta = "$file_path/gencode/gencode.$gencode_v.cds.fa"; 	 					# VAT
+my $network_dir=$variable{'network_dir'} if defined $variable{'network_dir'};									# Network hubs
+my $reg_net=$variable{'reg_net'} if defined $variable{'reg_net'};										# Regulatory Network
+my $gencode=$variable{'gencode'} if defined $variable{'gencode'};
 
 # Genome sequences
-my $reference_file = "$file_path/human_g1k_v37.fasta"; 									# Reference genome
-my $ancestral_file = "$file_path/human_ancestor_GRCh37_e59.fa";							# hg19 ancestral allele
+my $reference_file=$variable{'reference_file'} if defined $variable{'reference_file'}; 								# Reference genome
+my $ancestral_file=$variable{'ancestral_file'} if defined $variable{'ancestral_file'};									# hg19 ancestral allele
 
 # Gene info & recurrence
-my $gene_info_dir = "$file_path/gene_lists";                                            # Prior knowledge of genes, such as cancer / actionable genes.
-my $cancer_dir = "$file_path/cancer_recurrence";										# Public Recurrent data
-my $selection = "$file_path/gene.strong.selection";  								    # Gene under negative selection 
+my $gene_info_dir=$variable{'gene_info_dir'} if defined $variable{'gene_info_dir'};                                  # Prior knowledge of genes, such as cancer / actionable genes.
+my $cancer_dir=$variable{'cancer_dir'} if defined $variable{'cancer_dir'};										# Public Recurrent data
+my $selection=$variable{'selection'} if defined $variable{'selection'};  								    # Gene under negative selection 
 
-# feature weight file 
-my $weight_file = "$file_path/weighted.score.txt"; 
+# weighted scoring scheme
+my $weight_file=$variable{'weight_file'} if defined $variable{'weight_file'};                                    # weighted scoring scheme
+
+# GENCODE
+my $gencode_v = (split /\./,(split /\//,`ls $gencode/*.promoter.bed`)[-1])[1]; 
+my $cds = "$gencode/gencode.$gencode_v.cds.bed";  							# GENCODE CDS
+my $promoter = "$gencode/gencode.$gencode_v.promoter.bed"; 					# Promoter Region; upstream -2.5kb
+my $intron = "$gencode/gencode.$gencode_v.intron.bed";                        # Intronic Region
+my $utr = "$gencode/gencode.$gencode_v.utr.bed";                              # UTR Region
+my $coding_interval = "$gencode/gencode.$gencode_v.cds.interval";				# VAT
+my $coding_fasta = "$gencode/gencode.$gencode_v.cds.fa"; 	 					# VAT
 
 
-
-
-##   Check required files
-die "Error. $tgp_snp not found or empty...\n" unless (-f $tgp_snp && -s $tgp_snp);
-die "Error. $encode_annotation not found or empty...\n" unless (-f $encode_annotation && -s $encode_annotation);
-die "Error. $cds not found or empty...\n" unless (-f $cds && -s $cds);
-die "Error. $bound_motif not found or empty...\n" unless (-f $bound_motif && -s $bound_motif);
-die "Error. $promoter not found or empty...\n" unless (-f $promoter && -s $promoter);
-die "Error. $enhancer not found or empty...\n" unless (-f $enhancer && -s $enhancer);
+########   Check required files
+die "Error: $tgp_snp not found or empty...\n" unless (-f $tgp_snp && -s $tgp_snp);
+die "Error: $encode_annotation not found or empty...\n" unless (-f $encode_annotation && -s $encode_annotation);
+die "Error: $cds not found or empty...\n" unless (-f $cds && -s $cds);
+die "Error: $bound_motif not found or empty...\n" unless (-f $bound_motif && -s $bound_motif);
+die "Error: $promoter not found or empty...\n" unless (-f $promoter && -s $promoter);
+die "Error: $enhancer not found or empty...\n" unless (-f $enhancer && -s $enhancer);
 if ($genome_mode==2){
-	die "Error. $ancestral_file not found or empty...\n" unless (-f $ancestral_file && -s $ancestral_file);
+	die "Error: $ancestral_file not found or empty...\n" unless (-f $ancestral_file && -s $ancestral_file);
 }
 if ($nc_mode==0){
-	die "Error. $coding_interval not found or empty...\n" unless (-f $coding_interval && -s $coding_interval);
-	die "Error. $coding_fasta not found or empty...\n" unless (-f $coding_fasta && -s $coding_fasta);
+	die "Error: $coding_interval not found or empty...\n" unless (-f $coding_interval && -s $coding_interval);
+	die "Error: $coding_fasta not found or empty...\n" unless (-f $coding_fasta && -s $coding_fasta);
 }
-die "Error. $motif_pfm not found or empty...\n" unless (-f $motif_pfm && -s $motif_pfm);
-die "Error.	$reference_file not found or empty...\n" unless (-f $reference_file && -s $reference_file);
-die "Error. $score_file not found or empty...\n" unless (-f $score_file && -s $score_file);
-die "Error. $weight_file not found or empty...\n" unless (-f $weight_file && -s $weight_file);
+die "Error: $motif_pfm not found or empty...\n" unless (-f $motif_pfm && -s $motif_pfm);
+die "Error:	$reference_file not found or empty...\n" unless (-f $reference_file && -s $reference_file);
+die "Error: $score_file not found or empty...\n" unless (-f $score_file && -s $score_file);
+die "Error: $weight_file not found or empty...\n" unless (-f $weight_file && -s $weight_file);
 
 ##   Main output files
 my $file_detail = "$output_path/Output.$outformat";
@@ -414,7 +427,7 @@ sub main{
 	print "... Start filtering SNVs with minor allele frequency = $maf ...\n";
 	
 	my $data = new Funseq_SNV;
-	$data -> snv_filter($infile,$informat,$tgp_snp,$maf,$out_snv_filter,$out_indel);     # filter variants
+	$data -> snv_filter($infile,$informat,$tgp_snp,$maf,$out_snv_filter,$out_indel,$sv_length_cut);     # filter variants
 	
 	if (-e "$output_path/$tag.infile"){
 		unlink ("$output_path/$tag.infile");
@@ -451,9 +464,9 @@ sub main{
 			$data -> sensitive($out_nc,$sensitive);	           # Sensitive regions
 			$data -> hot_region($out_nc,$hot_file);                           # non-coding variants in highly occupied regions or not 
 			$data -> motif_break($out_nc, $ancestral_file, $bound_motif, $genome_mode, $motif_pfm);      # Motif disruption analysis
-			$data -> gene_link($out_nc,$promoter,$enhancer,$intron,$utr,$network_dir,$medial);         # Associate non-coding variants to genes & network analysis 
+			$data -> gene_link($out_nc,$promoter,$enhancer,$intron,$utr,$network_dir);         # Associate non-coding variants to genes & network analysis 
 			# Motif gain 
-			$data -> motif_gain($motif_pfm,$reference_file,$score_file,4e-8,$out_motif);         # Gain-of-motif analysis. This step should be done after gene_link
+			$data -> motif_gain($motif_pfm,$reference_file,$score_file,$motif_p_value_cut,$out_motif);         # Gain-of-motif analysis. This step should be done after gene_link
 		}
 	
 	
@@ -486,9 +499,9 @@ sub main{
     
 		$indel -> gerp_score($gerp_file,$out_indel);
 		$indel -> annotations($out_indel,$conserved,$hot_file,$sensitive,$encode_annotation,$user_anno_dir,$bound_motif);
-		$indel -> gene_link($out_indel,$promoter,$enhancer,$intron,$utr,$network_dir,$cds,$selection,$medial);
+		$indel -> gene_link($out_indel,$promoter,$enhancer,$intron,$utr,$network_dir,$cds,$selection);
 		$indel -> coding($out_indel,$coding_interval,$coding_fasta,$nc_mode);
-		$indel -> motif_gain($motif_pfm,$reference_file,$score_file,4e-8,$out_indel_motif); 
+		$indel -> motif_gain($motif_pfm,$reference_file,$score_file,$motif_p_value_cut,$out_indel_motif); 
 		$indel -> intergrate($outformat,$tag,$gene_info_dir,$reg_net,$run_indel_out,$de_data);
 	}
     

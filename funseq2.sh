@@ -15,18 +15,20 @@ parallel=5
 out_path=out
 cancer_type=all
 score_cut=1.5
-user_anno=data_add/user_annotations
+user_anno=data_context/user_annotations
 recurdb_use=0
+sv_length_cut=20
 
 function usage 
 {
 	echo " 
 	
-	* Usage : ./run.sh -f file -maf MAF -m <1/2> -inf <bed/vcf> -outf <bed/vcf> -nc -o path -g file -exp file -cls file -exf <rpkm/raw> -p int -cancer cancer_type -s score -uw -ua user_annotations_directory -db
+	* Usage : ./run.sh -f file -maf MAF -m <1/2> -len length_cut -inf <bed/vcf> -outf <bed/vcf> -nc -o path -g file -exp file -cls file -exf <rpkm/raw> -p int -cancer cancer_type -s score -uw -ua user_annotations_directory -db
 	
 	Options : 
 		-f		[Required] User Input SNVs File
 		-inf	 	[Required] Input format - BED or VCF
+		-len            [Optional] Maximum length cutoff for Indel analysis, default = 20. Set to 'inf', if no filter.  
 		-maf 		[Optional] Minor Allele Frequency Threshold to filter 1KG SNVs,default = 0 
 		-m		[Optional] 1 - Somatic Genome (default); 2 - Germline or Personal Genome
 		-outf	 	[Optional] Output format - BED or VCF,default is VCF
@@ -72,6 +74,9 @@ while [ "$1" != "" ]; do
                                 ;;
 	-maf)			shift
 				maf=$1
+				;;
+	-len)			shift
+				sv_length_cut=$1
 				;;
 	-m | --mode)		shift
 				genome_mode=$1
@@ -123,9 +128,8 @@ while [ "$1" != "" ]; do
         shift
 done
 
-
 ## check commands ...
-if [[ $nc_mode==0 ]]
+if [[ $nc_mode == 0 ]]
 then    
 	NEEDED_COMMANDS="bedtools tabix perl snpMapper TFMpvalue-sc2pv awk sed"
 else
@@ -139,7 +143,6 @@ for cmd in ${NEEDED_COMMANDS} ; do
     fi
 done
 
-
 ## run programs...
 if [[ $user_input != "" &&  $maf != ""  &&  $genome_mode != ""  &&  $input_format != ""  &&  $output_format  != "" && $out_path != "" ]]
 then
@@ -147,10 +150,10 @@ then
 	then
 		if [[ $expression != "" && $class != "" && $exp_format != "" && $gene_list != "" ]]
 		then
-			perl scripts/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use $gene_list $expression $class $exp_format	
+			perl code/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use $sv_length_cut $gene_list $expression $class $exp_format	
 		elif [[ $expression != "" && $class != "" && $exp_format != "" && $gene_list == "" ]]
 		then
-			perl scripts/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use $expression $class $exp_format
+			perl code/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use $sv_length_cut $expression $class $exp_format
 		else	
 			echo "Please input both expression , class label and expression format data"
 	
@@ -158,9 +161,9 @@ then
 	else
 		if [[ $gene_list != "" ]]
 	 	then
-			perl scripts/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use $gene_list
+			perl code/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use $sv_length_cut $gene_list
 		else
-			perl scripts/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use
+			perl code/funseq2.pl $user_input $maf $genome_mode $input_format $output_format $nc_mode $out_path $parallel $cancer_type $score_cut $weight_mode $user_anno $recurdb_use $sv_length_cut
 		fi
 	fi
 else

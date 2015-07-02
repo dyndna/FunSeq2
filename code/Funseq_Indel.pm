@@ -117,8 +117,9 @@ sub annotations {
 	}
 	closedir(DIR);
 	
-	open(IN, "intersectBed -a $input -b $bound_motif -wo | sort -k 1,1 -k 2,2n |uniq | ");
+	open(IN, "intersectBed -a $bound_motif -b $input -wo | sort -k 1,1 -k 2,2n |uniq | awk '{OFS=\"\t\"}{print \$8,\$9,\$10,\$11,\$12,\$1,\$2,\$3,\$4,\$5,\$6,\$7}' | ");
 	while(<IN>){
+		chomp $_;
 		my @tmp = split /\t+/,$_;
 		my $id = join("\t",@tmp[0..4]);
 		my $interval = join("",$tmp[5],":",$tmp[6],"-",$tmp[7]);
@@ -135,14 +136,13 @@ sub annotations {
 ## Promoter,Intron,UTR,Enhancer  (network centrality ... )
 sub gene_link{
 	my $self = shift;
-	my ($input,$promoter,$distal,$intron,$utr,$network,$cds,$selection,$medial) = @_;
+	my ($input,$promoter,$distal,$intron,$utr,$network,$cds,$selection) = @_;
 	my %network;
 	my %net_degree = ();
 	my %selection;
 	
 	my @pro =split /\n/, `intersectBed -a $input -b $promoter -wo | sort -k 1,1 -k 2,2n |uniq`;
 	my @dis = split /\n/, `intersectBed -a $input -b $distal -wo | sort -k 1,1 -k 2,2n |uniq`;
-	my @med = split /\n/, `intersectBed -a $input -b $medial -wo | sort -k 1,1 -k 2,2n |uniq`;
 	my @intron = split /\n/, `intersectBed -a $input -b $intron -wo | sort -k 1,1 -k 2,2n |uniq`;
 	my @utr = split /\n/, `intersectBed -a $input -b $utr -wo | sort -k 1,1 -k 2,2n |uniq`;
 	my @cds = split /\n/, `intersectBed -a $input -b $cds -wo | sort -k 1,1 -k 2,2n |uniq`;
@@ -183,7 +183,6 @@ sub gene_link{
 	&func(\@intron,"Intron");
 	&func(\@utr,"UTR");
 	&func(\@pro,"Promoter");
-	&func(\@med,"Medial");
 	&func(\@dis,"Distal");
 	&func(\@cds,"Coding");
 	
@@ -194,25 +193,6 @@ sub gene_link{
 			my $id = join("\t",@tmp[0..4]);
 			my $gene = $tmp[8];
 			
-			if ($tag eq "Distal" && scalar @tmp > 10){
-				if (defined $self ->{HIS}->{$id}->{$gene}->{$tmp[10]}){
-					if ($self ->{HIS}->{$id}->{$gene}->{$tmp[10]} < $tmp[9]){
-						$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-					}
-				}else{
-					$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-				}
-			}
-			
-			if ($tag eq "Medial" && scalar @tmp > 10){
-				if (defined $self ->{HIS}->{$id}->{$gene}->{$tmp[10]}){
-					if ($self ->{HIS}->{$id}->{$gene}->{$tmp[10]} < $tmp[9]){
-						$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-					}
-				}else{
-					$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-				}
-			}
 
 			$self->{GENE}->{$id}->{$gene}->{$tag}=1;
 	
@@ -356,7 +336,7 @@ sub motif_gain{
 	foreach $id(sort keys %{$self->{GENE}}){
 		my $switch = 0;
 		foreach my $gene(keys %{$self -> {GENE}->{$id}}){
-			if (defined $self ->{GENE} ->{$id} ->{$gene} -> {"Promoter"} || defined $self ->{GENE}->{$id}->{$gene}->{"Distal"} || defined $self ->{GENE}->{$id}->{$gene}->{"Medial"} || defined $self ->{GENE}->{$id}->{$gene}->{"UTR"}){
+			if (defined $self ->{GENE} ->{$id} ->{$gene} -> {"Promoter"} || defined $self ->{GENE}->{$id}->{$gene}->{"Distal"}){
 				$switch = 1;
 			}
 		}
@@ -459,7 +439,7 @@ sub motif_gain{
 			
 					
 			# sequence scanning .... reference 
-			for ($i=30 - $motif_length; $i < 30; $i ++){
+			for ($i=30 - $motif_length; $i < 29 +length($ref); $i ++){
 				$ref_pwm_score = 0;
 				
 				# calculate reference & alternative PWM score;
@@ -478,7 +458,7 @@ sub motif_gain{
 				}
 			}			
 		}
-		print keys %refpwm,"\n";
+		#print keys %refpwm,"\n";
 		
 		foreach $prev_name(sort keys %motif){
 			if (defined $refpwm{$prev_name}){
@@ -674,15 +654,6 @@ sub intergrate{
     			foreach my $gene (sort keys %{$self -> {GENE} -> {$id}}){
     				my $info = "$gene(".join("&",sort keys %{$self->{GENE}->{$id}->{$gene}}).")";
     				
-    				if (defined $self -> {HIS}->{$id}->{$gene}){
-    					undef my @his_info;
-    					foreach my $his (keys %{$self -> {HIS}->{$id}->{$gene}}){
-    						push @his_info, join(":",$his,$self -> {HIS}->{$id}->{$gene}->{$his});
-    					}
-    					if (scalar @his_info > 0){
-    						$info = join('',$info,'[',join(",",@his_info),']');
-    					}
-    				}
     				
     				if (defined $gene_info{$gene}){
     					$info = $info.join("",sort keys %{$gene_info{$gene}});
@@ -749,20 +720,6 @@ sub intergrate{
     			my $info = "";
     			foreach my $gene (sort keys %{$self -> {GENE} -> {$id}}){
     			    $info = $info."$gene(".join("&",sort keys %{$self->{GENE}->{$id}->{$gene}}).")";
-    				
-    				if (defined $self -> {HIS}->{$id}->{$gene}){
-    						undef my @his_info;
-    						foreach my $his (keys %{$self -> {HIS}->{$id}->{$gene}}){
-    							push @his_info, join(":",$his,$self -> {HIS}->{$id}->{$gene}->{$his});
-    						}
-    						if (scalar @his_info > 0){
-    							$info = join('',$info,'[',join(",",@his_info),'],');
-    						}else{
-    							$info = $info.",";
-    						}
-    					}else{
-    						$info = $info.",";
-    					}    
     				
     			    if (defined $gene_info{$gene}){
     					$gene_info = join("",$gene_info,$gene,join("",sort keys %{$gene_info{$gene}}),",");

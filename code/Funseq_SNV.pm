@@ -145,8 +145,9 @@ sub snv_filter{
 	my $maf_cut_off  = $ARGV[3];   #Minor allele frequency cut-off
 	my $output = $ARGV[4];         #output
 	my $out_indel = $ARGV[5];	   #indel output
+	my $sv_length_cut = $ARGV[6]; 	   #indel length cut-offs	
 	
-	
+
 	my $input_line; 
 	my @snp_tabix;
 	my $snp;
@@ -199,9 +200,13 @@ sub snv_filter{
 		   			$self->{DES} -> {$id} = join("\t",@tmp[0..4]);
 		   			print OUT $self -> {DES} -> {$id},"\n";
 		   		}
-		   	}elsif (max(length($tmp[3]),length($tmp[4])) <= 20){
+		   	}else{
+				if ($sv_length_cut eq 'inf'){
+					 print INDEL join("\t",@tmp[0..4]),"\n";
+				}elsif(max(length($tmp[3]),length($tmp[4])) <= $sv_length_cut){
 		   			print INDEL join("\t",@tmp[0..4]),"\n";
-		   	}
+		   		}
+			}
 		}
 		close IN;
 		close INDEL;
@@ -324,7 +329,7 @@ EOF
 	close MOTIF;
 
 
-	$input_file_new = `intersectBed -a $input_file -b $bound_motif -wo | sort -k 1,1 -k 2,2n |uniq`;
+	$input_file_new = `intersectBed -a $bound_motif -b $input_file -wo | sort -k 1,1 -k 2,2n |uniq | awk '{OFS="\t"}{print \$8,\$9,\$10,\$11,\$12,\$1,\$2,\$3,\$4,\$5,\$6,\$7}'`;
 	if ($mode == 2){
 		my @line = split /\n+/, `printf "$input_file_new" | awk '{FS="\t";OFS="\t"}{gsub("chr","",\$1); print \$1,\$2,\$3}' | fastaFromBed -fi $ancestral_file -bed stdin -fo stdout`;
 		foreach my $line (@line){
@@ -486,7 +491,7 @@ sub motif_gain{
 	foreach $id(sort keys %{$self->{GENE}}){
 		my $switch = 0;
 		foreach my $gene(keys %{$self -> {GENE}->{$id}}){
-			if (defined $self ->{GENE} ->{$id} ->{$gene} -> {"Promoter"} || defined $self ->{GENE}->{$id}->{$gene}->{"Distal"} || defined $self ->{GENE}->{$id}->{$gene}->{"Medial"}){
+			if (defined $self ->{GENE} ->{$id} ->{$gene} -> {"Promoter"} || defined $self ->{GENE}->{$id}->{$gene}->{"Distal"}){
 				$switch = 1;
 			}
 		}
@@ -545,6 +550,8 @@ sub motif_gain{
 		@seq = @{$seq};
 		
 		foreach $prev_name(sort keys %motif){
+			print $prev_name,"\n";
+
 			$motif_length = scalar @{$motif{$prev_name}};
 	
 			unless (-d "pwm"){
@@ -588,8 +595,15 @@ sub motif_gain{
 				$ref_pwm_score = $alt_pwm_score - $motif{$prev_name}->[29-$i]->{$alt} + $motif{$prev_name}->[29-$i]->{$ref};
 				
 				if ($alt_pwm_score > $ref_pwm_score){
-					if ((defined $score_upper{$prev_name} && $ref_pwm_score >= $score_upper{$prev_name}) || (defined $score_lower{$prev_name} && $alt_pwm_score <= $score_lower{$prev_name})){
-					}elsif((defined $score{$prev_name} && $alt_pwm_score > $score{$prev_name} && $ref_pwm_score < $score{$prev_name}) || (defined $score_upper{$prev_name} && defined $score_lower{$prev_name} && $alt_pwm_score >= $score_upper{$prev_name} && $ref_pwm_score <= $score_lower{$prev_name})){
+					if (defined $score{$prev_name}){
+						if ($alt_pwm_score > $score{$prev_name} && $ref_pwm_score < $score{$prev_name}){
+							&out_print($prev_name,$i,$motif_length,$alt_pwm_score,$ref_pwm_score,$strand,$id,$start);
+						}else{
+							next;
+						}
+					}elsif ((defined $score_upper{$prev_name} && $ref_pwm_score >= $score_upper{$prev_name}) || (defined $score_lower{$prev_name} && $alt_pwm_score <= $score_lower{$prev_name})){
+						next;
+					}elsif(defined $score_upper{$prev_name} && defined $score_lower{$prev_name} && $alt_pwm_score >= $score_upper{$prev_name} && $ref_pwm_score <= $score_lower{$prev_name}){
 						&out_print($prev_name,$i,$motif_length,$alt_pwm_score,$ref_pwm_score,$strand,$id,$start);	
 					}else{
 						if (defined $score_upper{$prev_name} && $alt_pwm_score > $score_upper{$prev_name}){
@@ -717,13 +731,12 @@ sub user_annotation{
 ## Promoter,Intron,UTR,Enhancer  (network centrality ... )
 sub gene_link{
 	my $self = shift;
-	my ($input,$promoter,$distal,$intron,$utr,$network,$medial) = @_;
+	my ($input,$promoter,$distal,$intron,$utr,$network) = @_;
 	my %network;
 	my %net_degree = ();
 	
 	my @pro =split /\n/, `intersectBed -a $input -b $promoter -wo | sort -k 1,1 -k 2,2n |uniq`;
 	my @dis = split /\n/, `intersectBed -a $input -b $distal -wo | sort -k 1,1 -k 2,2n |uniq`;
-	my @med = split /\n/, `intersectBed -a $input -b $medial -wo | sort -k 1,1 -k 2,2n |uniq`;
 	my @intron = split /\n/, `intersectBed -a $input -b $intron -wo | sort -k 1,1 -k 2,2n |uniq`;
 	my @utr = split /\n/, `intersectBed -a $input -b $utr -wo | sort -k 1,1 -k 2,2n |uniq`;
 	
@@ -751,7 +764,6 @@ sub gene_link{
 	&func(\@intron,"Intron");
 	&func(\@utr,"UTR");
 	&func(\@pro,"Promoter");
-	&func(\@med,"Medial");
 	&func(\@dis,"Distal");
 
 	
@@ -763,31 +775,8 @@ sub gene_link{
 			my $gene = $tmp[8];
 			
 			if (defined $self -> {GENE}->{$id}->{$gene}->{"Promoter"}){
-			
-			}elsif (defined $self -> {GENE}->{$id}->{$gene}->{"Medial"}){
-			
 			}else{
 				$self->{GENE}->{$id}->{$gene}->{$tag}=1;
-				
-				if ($tag eq "Distal" && scalar @tmp > 10){
-					if (defined $self ->{HIS}->{$id}->{$gene}->{$tmp[10]}){
-						if ($self ->{HIS}->{$id}->{$gene}->{$tmp[10]} < $tmp[9]){
-							$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-						}
-					}else{
-						$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-					}
-				}
-			
-				if ($tag eq "Medial" && scalar @tmp > 10){
-					if (defined $self ->{HIS}->{$id}->{$gene}->{$tmp[10]}){
-						if ($self ->{HIS}->{$id}->{$gene}->{$tmp[10]} < $tmp[9]){
-							$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-						}
-					}else{
-						$self ->{HIS}->{$id}->{$gene}->{$tmp[10]} = $tmp[9];
-					}
-				}
 			}
 		 
 			if (defined $network{$gene}){
@@ -1306,16 +1295,6 @@ exit;
     				foreach my $gene (sort keys %{$self -> {GENE} -> {$id}}){
     					my $info = "$gene(".join("&",sort keys %{$self->{GENE}->{$id}->{$gene}}).")";
     					
-    					if (defined $self -> {HIS}->{$id}->{$gene}){
-    						undef my @his_info;
-    						foreach my $his (keys %{$self -> {HIS}->{$id}->{$gene}}){
-    							push @his_info, join(":",$his,$self -> {HIS}->{$id}->{$gene}->{$his});
-    						}
-    						if (scalar @his_info > 0){
-    							$info = join('',$info,'[',join(",",@his_info),']');
-    						}
-    					}
-    					
     					if (defined $gene_info{$gene}){
     						$info = $info.join("",sort keys %{$gene_info{$gene}});
     					}
@@ -1423,20 +1402,6 @@ exit;
     				foreach my $gene (sort keys %{$self -> {GENE} -> {$id}}){
     				    $info = $info."$gene(".join("&",sort keys %{$self->{GENE}->{$id}->{$gene}}).")";
     				     
-    				     if (defined $self -> {HIS}->{$id}->{$gene}){
-    						undef my @his_info;
-    						foreach my $his (keys %{$self -> {HIS}->{$id}->{$gene}}){
-    							push @his_info, join(":",$his,$self -> {HIS}->{$id}->{$gene}->{$his});
-    						}
-    						if (scalar @his_info > 0){
-    							$info = join('',$info,'[',join(",",@his_info),'],');
-    						}else{
-    							$info = $info.",";
-    						}
-    					}else{
-    						$info = $info.",";
-    					}
-    					
     				    if (defined $gene_info{$gene}){
     						$gene_info = join("",$gene_info,$gene,join("",sort keys %{$gene_info{$gene}}),",");
     					}
@@ -1516,7 +1481,7 @@ sub recur{
 ##INFO=<ID=SEN,Number=.,Type=String,Description="In Sensitive Region">
 ##INFO=<ID=USEN,Number=.,Type=String,Description="In Ultra-Sensitive Region">
 ##INFO=<ID=UCONS,Number=.,Type=String,Description="In Ultra-Conserved Region">
-##INFO=<ID=GENE,Number=.,Type=String,Description="Target Gene (For coding - directly affected genes ; For non-coding - promoter, distal (>10kb from TSS) or Medial (within 10kb) regulatory module)">
+##INFO=<ID=GENE,Number=.,Type=String,Description="Target Gene (For coding - directly affected genes ; For non-coding - promoter, enhancer regulatory module)">
 ##INFO=<ID=CANG,Number=.,Type=String,Description="Prior Gene Information, e.g.[cancer][TF_regulating_known_cancer_gene][up_regulated][actionable]...";
 ##INFO=<ID=CDSS,Number=.,Type=String,Description="Coding Score">
 ##INFO=<ID=NCDS,Number=.,Type=String,Description="NonCoding Score">
@@ -1774,13 +1739,13 @@ EOF
 				###
 				
 					if(defined $recur_id{$id}){	
-						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";", $feature[$#feature]+$weight{RECUR},";",$recur_id{$id},";$db_recur\n";
+						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";", $feature[$#feature],':',$feature[$#feature]+$weight{RECUR},";",$recur_id{$id},";$db_recur\n";
 						if (($feature[13]+$weight{RECUR})>=$score_cut || /\[known_cancer_gene\]/){
 							print DRIVER join("\t",@temp[0..5]),"\t",join(";",@feature[0..5]),";$hot_simp;$motif_simp;",join(";",@feature[8 ..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";Yes;$recur_cancer\n";
 						}
 						
 					}elsif($db_recur ne "." && $recur_db_score ==1){
-						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";", $feature[$#feature]+$weight{RECUR},";.;$db_recur\n";
+						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";", $feature[$#feature],':',$feature[$#feature]+$weight{RECUR},";.;$db_recur\n";
 						if (($feature[13]+$weight{RECUR})>=$score_cut || /\[known_cancer_gene\]/){
 							print DRIVER join("\t",@temp[0..5]),"\t",join(";",@feature[0..5]),";$hot_simp;$motif_simp;",join(";",@feature[8 ..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";.;$recur_cancer\n";
 						}
@@ -1809,7 +1774,7 @@ EOF
 					if ($feature[5] =~ /Enhancer\(/){
 						push @encode_simp,"Enhancer";
 					}
-					if ($feature[5] =~ /ncRNA\(/){
+					if ($feature[5] =~ /RNA\(/){
 						push @encode_simp,"ncRNA";
 					}
 					
@@ -1838,7 +1803,7 @@ EOF
 					
 					if (length($line )>0){
 						$line =~ s/,$//;
-						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";",$line,";$db_recur\n";
+						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";",$feature[$#feature],':',$feature[$#feature]+$weight{RECUR},";",$line,";$db_recur\n";
 						if (($feature[13]+$weight{RECUR})>=$score_cut || /\[known_cancer_gene\]/){
 							print DRIVER join("\t",@temp[0..5]),"\t",join(";",@feature[0..4]),";",join(",",@encode_simp),";$hot_simp;$motif_simp;",join(";", @feature[8..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";Yes;$recur_cancer\n";
 						}
@@ -1846,12 +1811,12 @@ EOF
 						if (($feature[13]+$weight{RECUR})>=$score_cut || /\[known_cancer_gene\]/){
 							print DRIVER join("\t",@temp[0..5]),"\t",join(";",@feature[0..4]),";",join(",",@encode_simp),";$hot_simp;$motif_simp;",join(";", @feature[8..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";Yes;$recur_cancer\n";
 						}
-						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";",$recur_id{$id},";$db_recur\n";
+						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";",$feature[$#feature],':',$feature[$#feature]+$weight{RECUR},";",$recur_id{$id},";$db_recur\n";
 					}elsif($db_recur ne "." && $recur_db_score ==1){
 						if (($feature[13]+$weight{RECUR})>=$score_cut || /\[known_cancer_gene\]/){
 							print DRIVER join("\t",@temp[0..5]),"\t",join(";",@feature[0..4]),";",join(",",@encode_simp),";$hot_simp;$motif_simp;",join(";", @feature[8..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";.;$recur_cancer\n";
 						}
-						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";",$feature[$#feature]+$weight{RECUR},";.;$db_recur\n";
+						print OUT join("\t",@temp[0..5]),"\t",join(";",@feature[0..$#feature-1]),";",$feature[$#feature],':',$feature[$#feature]+$weight{RECUR},";.;$db_recur\n";
 					}else{
 						if (($feature[13])>=$score_cut || /\[known_cancer_gene\]/){
 							print DRIVER join("\t",@temp[0..5]),"\t",join(";",@feature[0..4]),";",join(",",@encode_simp),";$hot_simp;$motif_simp;",join(";", @feature[8..$#feature]),";.;$recur_cancer\n";
@@ -1963,7 +1928,7 @@ EOF
 					if ($encode_info =~ /Enhancer\(/){
 						push @encode_simp,"Enhancer";
 					}
-					if ($encode_info =~ /ncRNA\(/){
+					if ($encode_info =~ /RNA\(/){
 						push @encode_simp,"ncRNA";
 					}
 					
@@ -1996,7 +1961,7 @@ EOF
 					if (length($line) >0 ){
 						s/;NCDS=\S+$//g;	
 						$line =~ s/,$//;
-						print OUT $_,";NCDS=",$score+$weight{RECUR},";RECUR=",$line,"$db_recur\n";
+						print OUT $_,";NCDS=",$score,':',$score+$weight{RECUR},";RECUR=",$line,"$db_recur\n";
 						if($score+$weight{RECUR} >=$score_cut || /\[known_cancer_gene\]/){
 							s/MOTIFG=.*?;|MOTIFBR=.*?;|NCENC=.*?;|HOT=.*?;|MOTIFG=.*?$|MOTIFBR=.*?$|NCENC=.*?$|HOT=.*?$//g;
 							s/;+$//;
@@ -2004,7 +1969,7 @@ EOF
 						}
 					}elsif(defined $recur_id{$id}){
 						s/;NCDS=\S+$//g;	
-						print OUT $_,";NCDS=",$score+$weight{RECUR},";RECUR=",$recur_id{$id},"$db_recur\n";
+						print OUT $_,";NCDS=",$score,':',$score+$weight{RECUR},";RECUR=",$recur_id{$id},"$db_recur\n";
 						if($score+$weight{RECUR} >=$score_cut || /\[known_cancer_gene\]/){
 							s/MOTIFG=.*?;|MOTIFBR=.*?;|NCENC=.*?;|HOT=.*?;|MOTIFG=.*?$|MOTIFBR=.*?$|NCENC=.*?$|HOT=.*?$//g;
 							s/;+$//;
@@ -2012,7 +1977,7 @@ EOF
 						}
 					}elsif(scalar @db_recur >0 && $recur_db_score ==1){
 						s/;NCDS=\S+$//g;	
-						print OUT $_,";NCDS=",$score+$weight{RECUR},"$db_recur\n";
+						print OUT $_,";NCDS=",$score,':',$score+$weight{RECUR},"$db_recur\n";
 						if($score+$weight{RECUR} >=$score_cut || /\[known_cancer_gene\]/){
 							s/MOTIFG=.*?;|MOTIFBR=.*?;|NCENC=.*?;|HOT=.*?;|MOTIFG=.*?$|MOTIFBR=.*?$|NCENC=.*?$|HOT=.*?$//g;
 							s/;+$//;
@@ -2041,7 +2006,7 @@ EOF
 					
 					if(defined $recur_id{$id}){
 						s/;NCDS=\S+$//g;	
-						print OUT $_,";NCDS=",$score+$weight{RECUR},";RECUR=",$recur_id{$id},"$db_recur\n";
+						print OUT $_,";NCDS=",$score,':',$score+$weight{RECUR},";RECUR=",$recur_id{$id},"$db_recur\n";
 						if($score+$weight{RECUR} >=$score_cut || /\[known_cancer_gene\]/){
 							s/MOTIFG=.*?;|HOT=.*?;|MOTIFG=.*?$|HOT=.*?$//g;
 							s/;+$//;
@@ -2049,7 +2014,7 @@ EOF
 						}
 					}elsif(scalar @db_recur >0 && $recur_db_score ==1){	
 						s/;NCDS=\S+$//g;	
-						print OUT $_,";NCDS=",$score+$weight{RECUR},"$db_recur\n";
+						print OUT $_,";NCDS=",$score,':',$score+$weight{RECUR},"$db_recur\n";
 						if($score+$weight{RECUR} >=$score_cut || /\[known_cancer_gene\]/){
 							s/MOTIFG=.*?;|HOT=.*?;|MOTIFG=.*?$|HOT=.*?$//g;
 							s/;+$//;
